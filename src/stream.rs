@@ -9,12 +9,22 @@ use futures::{ready, Future, FutureExt, Stream};
 pub enum DisposableResult<T> {
     Some(T),
     None,
-    /// Discard the current stream.
+    /// Discard the current stream and open a new one.
     Discard,
 }
 
-/// A stream that can be aborted in order to be reconstructed
-/// later.
+impl<T, E> DisposableResult<Result<T, E>> {
+    #[must_use]
+    pub const fn ok(value: T) -> Self {
+        Self::Some(Ok(value))
+    }
+
+    #[must_use]
+    pub const fn err(err: E) -> Self {
+        Self::Some(Err(err))
+    }
+}
+
 #[allow(clippy::module_name_repetitions)]
 pub trait DisposableStream {
     type Item;
@@ -32,8 +42,9 @@ pub trait CreateStream {
     fn connect() -> BoxedFuture<Result<Self::Stream, Self::Error>>;
 }
 
-/// A tough stream that automatically reconnects on
-/// unexpected disconnects.
+/// A tough stream made up of multiple [`DisposableStream`]s,
+/// seamlessly moving from one to another at the end of their
+/// respective lifetime.
 #[allow(clippy::module_name_repetitions)]
 pub struct DurableStream<T>
 where
@@ -53,7 +64,6 @@ where
     }
 
     pub fn reconnect(&mut self) {
-        println!("reconnecting!!!!!");
         self.state = State::Connecting(T::connect());
     }
 }
@@ -62,7 +72,7 @@ impl<T> Stream for DurableStream<T>
 where
     T: CreateStream,
 {
-    type Item = <<T as CreateStream>::Stream as DisposableStream>::Item;
+    type Item = Result<<<T as CreateStream>::Stream as DisposableStream>::Item, T::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let stream = match &mut self.state {
@@ -72,12 +82,12 @@ where
                     self.state = State::Connected(s);
                     self.state.stream_mut().unwrap()
                 }
-                Err(_e) => todo!(),
+                Err(e) => return Poll::Ready(Some(Err(e))),
             },
         };
 
         match ready!(Pin::new(stream).poll_next(cx)) {
-            DisposableResult::Some(value) => Poll::Ready(Some(value)),
+            DisposableResult::Some(value) => Poll::Ready(Some(Ok(value))),
             DisposableResult::None => Poll::Ready(None),
             DisposableResult::Discard => {
                 self.reconnect();
