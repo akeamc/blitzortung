@@ -13,6 +13,7 @@ required-features = ["live"]
 
 [dependencies]
 futures = "0.3.21"
+geo = { version = "0.20.1", optional = true }
 rand = { version = "0.8.5", optional = true }
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
@@ -22,7 +23,7 @@ tokio = { version = "1.18.2", features = ["net"] }
 tokio-tungstenite = { version = "0.17.1", features = ["native-tls"], optional = true }
 
 [features]
-default = ["live"]
+default = ["live", "geo"]
 live = ["dep:tokio-tungstenite", "tokio/time", "tokio/rt", "tokio/macros", "dep:rand", "time"]
 
 [dev-dependencies]

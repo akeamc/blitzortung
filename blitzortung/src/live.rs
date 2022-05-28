@@ -6,6 +6,8 @@ use std::{
 };
 
 use futures::{ready, Future, FutureExt, SinkExt, Stream};
+#[cfg(feature = "geo")]
+use geo::{point, Point};
 use rand::{prelude::SliceRandom, rngs::OsRng};
 use serde::Deserialize;
 use thiserror::Error;
@@ -169,6 +171,15 @@ pub struct Strike {
     /// Delay of this message, essentially.
     #[serde(with = "duration_secs_serde")]
     pub delay: Duration,
+}
+
+impl Strike {
+    /// Get the estimated location of the strike.
+    #[must_use]
+    #[cfg(feature = "geo")]
+    pub fn location(&self) -> Point<f64> {
+        point! { x: self.lon, y: self.lat }
+    }
 }
 
 impl FromStr for Strike {
