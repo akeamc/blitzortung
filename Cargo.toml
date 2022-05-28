@@ -31,3 +31,4 @@ bin = ["tokio/rt", "tokio/macros", "tokio/rt-multi-thread", "live", "dep:anyhow"
 
 [dev-dependencies]
 criterion = "0.3.5"
+tokio-test = "0.4.2"
