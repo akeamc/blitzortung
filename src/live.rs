@@ -217,7 +217,6 @@ pub fn create_stream() -> DurableStream<StrikeStream> {
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
-    use time::OffsetDateTime;
 
     use super::{create_stream, decode, Strike};
 
