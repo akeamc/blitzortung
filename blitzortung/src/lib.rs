@@ -1,9 +1,14 @@
+//! Blitzortung.org client library.
+//!
+//! ## Live data
+//!
+//! For realtime data, the Blitzortung.org websocket servers are used.
+//! **This requires the `live` feature to be enabled.**
 #![warn(
     clippy::pedantic,
     clippy::nursery,
     missing_docs,
-    missing_debug_implementations,
-    unreachable_pub
+    missing_debug_implementations
 )]
 
 #[cfg(feature = "live")]

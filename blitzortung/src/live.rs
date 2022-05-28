@@ -1,4 +1,4 @@
-//! Live data from Blitzortung.org via Websockets.
+//! Live data from Blitzortung.org via websockets.
 use std::{
     pin::Pin,
     str::FromStr,
@@ -11,18 +11,21 @@ use serde::Deserialize;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::stream::{CreateStream, DisposableResult, DisposableStream, DurableStream};
 
+/// An error that can occurr when streaming data.
 #[derive(Debug, Error)]
-pub enum Error {
-    #[error("error decoding message")]
-    DecodingError,
+pub enum StreamError {
+    /// This error is returned if the JSON messages cannot be parsed.
     #[error("decode json failed")]
-    JsonError(#[from] serde_json::Error),
+    Serde(#[from] serde_json::Error),
+    /// If something goes wrong when connecting or when receiving a websocket
+    /// message, [`StreamError::Websocket`] is returned.
     #[error("{0}")]
-    TransportError(#[from] tokio_tungstenite::tungstenite::Error),
+    Websocket(#[from] tungstenite::Error),
 }
 
 const WS_SERVERS: &[&str] = &[
@@ -82,14 +85,22 @@ fn decode(ciphertext: &str) -> String {
     out
 }
 
+/// A station monitoring lightning strikes.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Station {
+    /// Station id.
     pub sta: u32,
-    pub time: i64,
-    pub lat: f32,
-    pub lon: f32,
-    pub alt: i32,
+    /// Time between strike and observation.
+    #[serde(with = "duration_nanos_serde")]
+    pub time: Duration,
+    /// Station latitude.
+    pub lat: f64,
+    /// Station longitude.
+    pub lon: f64,
+    /// Station altitude (meters).
+    pub alt: f64,
+    /// Status?
     pub status: u32,
 }
 
@@ -130,28 +141,38 @@ mod duration_secs_serde {
     }
 }
 
+/// A lightning strike.
 #[derive(Debug, Deserialize)]
 pub struct Strike {
+    /// Timestamp of the strike.
     #[serde(with = "unix_nanos_serde")]
     pub time: OffsetDateTime,
+    /// Estimated latitude.
     pub lat: f64,
+    /// Estimated longitude.
     pub lon: f64,
+    /// Estimated altitude.
     pub alt: f64,
+    /// Polarity.
     pub pol: i32,
     /// Maximum deviation span.
     #[serde(with = "duration_nanos_serde")]
     pub mds: Duration,
     /// Minimum cycle gap (degrees).
     pub mcg: f32,
+    /// Status?
     pub status: i32,
+    /// Region number.
     pub region: u8,
+    /// Stations involved in the observation.
     pub sig: Vec<Station>,
+    /// Delay of this message, essentially.
     #[serde(with = "duration_secs_serde")]
     pub delay: Duration,
 }
 
 impl FromStr for Strike {
-    type Err = Error;
+    type Err = StreamError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let json = decode(s);
@@ -159,7 +180,7 @@ impl FromStr for Strike {
     }
 }
 
-async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Error> {
     let server = *WS_SERVERS.choose(&mut OsRng).unwrap();
     let (mut stream, _) = connect_async(server).await?;
 
@@ -169,9 +190,13 @@ async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> 
 }
 
 impl DisposableStream for WebSocketStream<MaybeTlsStream<TcpStream>> {
-    type Item = Result<Strike, Error>;
+    type ItemOk = Strike;
+    type ItemError = StreamError;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<DisposableResult<Self::Item>> {
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<DisposableResult<Result<Self::ItemOk, Self::ItemError>>> {
         let message = match ready!(Stream::poll_next(self, cx)) {
             Some(Ok(message)) => message,
             Some(Err(e)) => return Poll::Ready(DisposableResult::err(e.into())),
@@ -186,13 +211,15 @@ impl DisposableStream for WebSocketStream<MaybeTlsStream<TcpStream>> {
     }
 }
 
+#[doc(hidden)]
+#[derive(Debug)]
 pub struct StrikeStream;
 
 impl CreateStream for StrikeStream {
     type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-    type Error = Error;
+    type ConnectError = tungstenite::Error;
 
-    fn connect() -> Pin<Box<dyn Future<Output = Result<Self::Stream, Self::Error>>>> {
+    fn connect() -> Pin<Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>>>> {
         connect().boxed()
     }
 }
@@ -226,7 +253,7 @@ mod tests {
         let mut stream = create_stream().take(10);
 
         while let Some(result) = stream.next().await {
-            result.unwrap().unwrap();
+            result.unwrap();
         }
     }
 
@@ -238,7 +265,7 @@ mod tests {
 
     #[test]
     fn parse_strike() {
-        let strike = r#"{"time":1653770696721238800,"latĆ31.7ġĕ8ělonĆ-75.109057ěalğ:Ě"polĆļmdsĆ142ďěmcgĆ249ěstĞuŅćěregiĪŁœiŎ:[ĀŔaŏ564ěĂĄņ8ġ02ļĝĺ3į6ēĮħĜş:ĭ8ģ60őŽĸĺĔŬ"ŧtŗņ2},Ŧŕŏź2ŭăąćĳ82űĨĞĠ6.ƞ476ĨſĭƤŴ33ķĹĠœŕƎŘĔƒƔŨćėŽŮƛ195ǂ6ưĜƢ:Ÿ.6źđƋĩīƀ79.34ďĲƱƉ7ŽƍƏćƑƓƌƕ:Ɵūƙůǥ15ǁĒơŷį0ĖňŒžǑ-ĘƥċĉƋƈŏ25ƴŖƷǡƺŏ92ǵƿǿ3ǂ5ƘǇǰ.ňĕǅƪǷǹ8ő991ǚŏƧȂƶƐƹǣƻĈƄǨƛŐ87Ňŵǈċ.ĳǖ5ŽǐĬǜǕ0čƨȟǠǵǞȄȥŧņ18ȊƚŏČǫȼǯĠƂ8ɇȉȷƫČȓǁĳĶ"ǾćĴȢǟȅȦŏŸȞāɊǥƞǫǬɏǉǔĲűĔȗȹ7.ȏŴǧɜƲɞǝƵǟƸǢɅǥŸļȋɩĕĲȰŷ3ģų9ǆȸƀűȳƮőȿȬɠŘ4ɄǤȀ6ɦʆƟĐ94ʊƣɶɷĖɳʒ2ɶĦƅȿĖǆɂȤʁǤĔǲȪȇĮ0ĈɭȍģǂʥʐɖŹĒ9ɒȿʤʙŏʜƻȀŴʺǥȜŸČʿǔĈˈ6ɕǷȺ9ǓĒɦɝƯļʴǠˎƖʹɧǩ3ǌČųɭ4Ģȏųɦʑĭ4İĘˈǽɻ1ǖˌ:ʛʶˏȉɛʆ˭ǂ3Őʿʌʥ174ȁǶĬ8Ƥđʽɟɺĺēʳɾʚ˨ćĉǆ̈Č2Čʐȱ˹8ĊĔɛ˷̖ģǖĴ̓ɝ̧˥̟ʵȆǥ4̒˒ȍȮ5ȡȑĆ˲ǋǅŐƩ̔ǒ0İǫǖǵɝ̐́ʀ̻ȉ5ʅɨ˲ǃĔǵŶͅʭűġȾ͋ĭʌĳ˿ĮȿĔɽȃ̡ͅȀ4̤͚ǗĮʥ˱Ģő̰̐ͤʌĒę̋ͫɈ͖́̃ĵ̓ʆ4̬ɸ͞ǈͲȳ˯5̓˷ď.Ȁǃ˭΂͔ɢʂǦ̇ɨ̦̌̈́͘ǉ͍Ƅďǫʫ-ȝ.ĴƯˈʗ͊˦͕ɣǥčɉǩǬ0̬̖͸ɘ˛̰̓ɵ͏ǅǆ̶Ǘ΄ͰȉƋʆʟḐ̌΍ŷɵ̧ȚʟΪʏƥ2Ǧˢɻ˭̡̞ͮ̂ǭΟǩώƨɇʿϓǜŐǏƫϘƞ͗Ȑˣɹ˦ʛ]ědeĝyĆɵ6}"#.parse::<Strike>().unwrap();
+        let strike = r#"{"time":1653770696721238800,"latĆ31.7ġĕ8ělonĆ-75.109057ěalğ:Ě"polĆļmdsĆ142ďěmcgĆ249ěstĞuŅćěregiĪŁœiŎ:[ĀŔaŏ564ěĂĄņ8ġ02ļĝĺ3į6ēĮħĜş:ĭ8ģ60őŽĸĺĔŬ"ŧtŗņ2},Ŧŕŏź2ŭăąćĳ82űĨĞĠ6.ƞ476ĨſĭƤŴ33ķĹĠœŕƎŘĔƒƔŨćėŽŮƛ195ǂ6ưĜƢ:Ÿ.6źđƋĩīƀ79.34ďĲƱƉ7ŽƍƏćƑƓƌƕ:Ɵūƙůǥ15ǁĒơŷį0ĖňŒžǑ-ĘƥċĉƋƈŏ25ƴŖƷǡƺŏ92ǵƿǿ3ǂ5ƘǇǰ.ňĕǅƪǷǹ8ő991ǚŏƧȂƶƐƹǣƻĈƄǨƛŐ87Ňŵǈċ.ĳǖ5ŽǐĬǜǕ0čƨȟǠǵǞȄȥŧņ18ȊƚŏČǫȼǯĠƂ8ɇȉȷƫČȓǁĳĶ"ǾćĴȢǟȅȦŏŸȞāɊǥƞǫǬɏǉǔĲűĔȗȹ7.ȏŴǧɜƲɞǝƵǟƸǢɅǥŸļȋɩĕĲȰŷ3ģų9ǆȸƀűȳƮőȿȬɠŘ4ɄǤȀ6ɦʆƟĐ94ʊƣɶɷĖɳʒ2ɶĦƅȿĖǆɂȤʁǤĔǲȪȇĮ0ĈɭȍģǂʥʐɖŹĒ9ɒȿʤʙŏʜƻȀŴʺǥȜŸČʿǔĈˈ6ɕǷȺ9ǓĒɦɝƯļʴǠˎƖʹɧǩ3ǌČųɭ4Ģȏųɦʑĭ4İĘˈǽɻ1ǖˌ:ʛʶˏȉɛʆ˭ǂ3Őʿʌʥ174ȁǶĬ8Ƥđʽɟɺĺēʳɾʚ˨ćĉǆ̈Č2Čʐȱ˹8ĊĔɛ˷̖ģǖĴ̓ɝ̧˥̟ʵȆǥ4̒˒ȍȮ5ȡȑĆ˲ǋǅŐƩ̔ǒ0İǫǖǵɝ̐́ʀ̻ȉ5ʅɨ˲ǃĔǵŶͅʭűġȾ͋ĭʌĳ˿ĮȿĔɽȃ̡ͅȀ4̤͚ǗĮʥ˱Ģő̰̐ͤʌĒę̋ͫɈ͖́̃ĵ̓ʆ4̬ɸ͞ǈͲȳ˯5̓˷ď.Ȁǃ˭΂͔ɢʂǦ̇ɨ̦̌̈́͘ǉ͍Ƅďǫʫ-ȝ.ĴƯˈʗ͊˦͕ɣǥčɉǩǬ0̬̖͸ɘ˛̰̓ɵ͏ǅǆ̶Ǘ΄ͰȉƋʆʟḐ̌΍ŷɵ̧ȚʟΪʏƥ2Ǧˢɻ˭̡̞ͮ̂ǭΟǩώƨɇʿϓǜŐǏƫϘƞ͗Ȑˣɹ˦ʛ]ědeĝyĆɵ6}"#.parse::<Strike>().unwrap();
 
         assert_eq!(
             strike.time.to_string(),

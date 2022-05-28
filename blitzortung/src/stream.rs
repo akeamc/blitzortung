@@ -1,11 +1,12 @@
 use std::{
-    error::Error,
+    fmt::Debug,
     pin::Pin,
     task::{Context, Poll},
 };
 
 use futures::{ready, Future, FutureExt, Stream};
 
+#[derive(Debug)]
 pub enum DisposableResult<T> {
     Some(T),
     None,
@@ -25,11 +26,17 @@ impl<T, E> DisposableResult<Result<T, E>> {
     }
 }
 
+/// Sort of like `TryStream`, since connection errors must
+/// be propagated to the stream consumer.
 #[allow(clippy::module_name_repetitions)]
 pub trait DisposableStream {
-    type Item;
+    type ItemOk;
+    type ItemError;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<DisposableResult<Self::Item>>;
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<DisposableResult<Result<Self::ItemOk, Self::ItemError>>>;
 }
 
 type BoxedFuture<T> = Pin<Box<dyn Future<Output = T>>>;
@@ -37,20 +44,22 @@ type BoxedFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 #[allow(clippy::module_name_repetitions)]
 pub trait CreateStream {
     type Stream: Sized + Unpin + DisposableStream;
-    type Error: Error;
+    // this avoids nested Results
+    type ConnectError: Into<<Self::Stream as DisposableStream>::ItemError>;
 
-    fn connect() -> BoxedFuture<Result<Self::Stream, Self::Error>>;
+    fn connect() -> BoxedFuture<Result<Self::Stream, Self::ConnectError>>;
 }
 
 /// A tough stream made up of multiple [`DisposableStream`]s,
 /// seamlessly moving from one to another at the end of their
 /// respective lifetime.
+#[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub struct DurableStream<T>
 where
     T: CreateStream,
 {
-    state: State<T::Stream, T::Error>,
+    state: State<T::Stream, T::ConnectError>,
 }
 
 impl<T> DurableStream<T>
@@ -72,7 +81,10 @@ impl<T> Stream for DurableStream<T>
 where
     T: CreateStream,
 {
-    type Item = Result<<<T as CreateStream>::Stream as DisposableStream>::Item, T::Error>;
+    type Item = Result<
+        <<T as CreateStream>::Stream as DisposableStream>::ItemOk,
+        <<T as CreateStream>::Stream as DisposableStream>::ItemError,
+    >;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let stream = match &mut self.state {
@@ -82,12 +94,12 @@ where
                     self.state = State::Connected(s);
                     self.state.stream_mut().unwrap()
                 }
-                Err(e) => return Poll::Ready(Some(Err(e))),
+                Err(e) => return Poll::Ready(Some(Err(e.into()))),
             },
         };
 
         match ready!(Pin::new(stream).poll_next(cx)) {
-            DisposableResult::Some(value) => Poll::Ready(Some(Ok(value))),
+            DisposableResult::Some(result) => Poll::Ready(Some(result)),
             DisposableResult::None => Poll::Ready(None),
             DisposableResult::Discard => {
                 self.reconnect();
@@ -107,6 +119,15 @@ impl<S, E> State<S, E> {
         match self {
             State::Connected(s) => Some(s),
             State::Connecting(_) => None,
+        }
+    }
+}
+
+impl<S, E> Debug for State<S, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connected(_) => f.debug_tuple("Connected").finish(),
+            Self::Connecting(_) => f.debug_tuple("Connecting").finish(),
         }
     }
 }
