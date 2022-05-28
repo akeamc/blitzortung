@@ -1,3 +1,4 @@
+//! Live data from Blitzortung.org via Websockets.
 use std::{
     pin::Pin,
     str::FromStr,
