@@ -73,10 +73,10 @@ fn decode(ciphertext: &str) -> String {
 
         let a = if 256 > code {
             char.to_string()
-        } else if let Some(stored) = dict.get(code as usize - 256) {
-            stored.clone()
         } else {
-            format!("{prev}{c}")
+            dict.get(code as usize - 256)
+                .map(Clone::clone)
+                .unwrap_or(format!("{prev}{c}"))
         };
         out.push_str(&a);
         c = a.chars().next().unwrap();
