@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.57"
-blitzortung = "0.1"
+blitzortung = { version = "0.1", default-features = false, features = ["live", "geo"] }
 futures = "0.3.21"
 geo = "0.20.1"
 tokio = { version = "1.18.2", features = ["rt", "rt-multi-thread", "macros"] }
