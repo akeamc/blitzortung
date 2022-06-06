@@ -15,6 +15,7 @@ use time::{Duration, OffsetDateTime};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tracing::{debug, instrument};
 
 use crate::stream::{CreateStream, DisposableResult, DisposableStream, DurableStream};
 
@@ -191,8 +192,19 @@ impl FromStr for Strike {
     }
 }
 
+impl TryFrom<Message> for Strike {
+    type Error = StreamError;
+
+    fn try_from(message: Message) -> Result<Self, Self::Error> {
+        message.to_text()?.parse()
+    }
+}
+
+#[instrument]
 async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Error> {
     let server = *WS_SERVERS.choose(&mut OsRng).unwrap();
+    debug!(server, "connecting");
+
     let (mut stream, _) = connect_async(server).await?;
 
     stream.send(Message::Text("{\"a\": 542}".into())).await?; // start receiving
@@ -215,9 +227,8 @@ impl DisposableStream for WebSocketStream<MaybeTlsStream<TcpStream>> {
         };
 
         match message {
-            Message::Text(s) => Poll::Ready(DisposableResult::Some(s.parse())),
             Message::Close(_) => Poll::Ready(DisposableResult::Discard),
-            _ => Poll::Pending,
+            _ => Poll::Ready(DisposableResult::Some(message.try_into())),
         }
     }
 }
