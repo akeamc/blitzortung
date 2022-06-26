@@ -63,7 +63,10 @@ fn decode(ciphertext: &str) -> String {
 
     let mut chars = ciphertext.chars();
 
-    let mut c = chars.next().unwrap();
+    let mut c = match chars.next() {
+        Some(c) => c,
+        None => return String::new(),
+    };
     let mut prev = c.to_string();
     let mut out = c.to_string();
     let mut dict = Vec::<String>::with_capacity(ciphertext.chars().count());

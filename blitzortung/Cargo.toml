@@ -25,7 +25,7 @@ tracing = "0.1.34"
 
 [features]
 default = ["live", "geo"]
-live = ["dep:tokio-tungstenite", "tokio/time", "tokio/rt", "tokio/macros", "dep:rand", "time"]
+live = ["dep:tokio-tungstenite", "dep:rand", "dep:time"]
 
 [dev-dependencies]
 criterion = "0.3.5"
