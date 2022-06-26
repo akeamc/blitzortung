@@ -11,12 +11,6 @@ use structopt::StructOpt;
 
 use tracing::{debug, info};
 
-fn cc_emoji(cc: &str) -> String {
-    cc.chars()
-        .filter_map(|c| char::from_u32(c as u32 + 0x1F1A5))
-        .collect()
-}
-
 #[derive(Debug, StructOpt)]
 struct Opt {
     /// Longitude of home.

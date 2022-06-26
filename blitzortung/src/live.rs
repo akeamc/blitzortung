@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{ready, Future, FutureExt, SinkExt, Stream};
+use futures::{future::BoxFuture, ready, FutureExt, SinkExt, Stream};
 #[cfg(feature = "geo")]
 use geo::{point, Point};
 use rand::{prelude::SliceRandom, rngs::OsRng};
@@ -241,7 +241,7 @@ impl CreateStream for StrikeStream {
     type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
     type ConnectError = tungstenite::Error;
 
-    fn connect() -> Pin<Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>>>> {
+    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::ConnectError>> {
         connect().boxed()
     }
 }

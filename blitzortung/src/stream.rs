@@ -4,7 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{ready, Future, FutureExt, Stream};
+use futures::{future::BoxFuture, ready, FutureExt, Stream};
 
 #[derive(Debug)]
 pub enum DisposableResult<T> {
@@ -39,15 +39,13 @@ pub trait DisposableStream {
     ) -> Poll<DisposableResult<Result<Self::ItemOk, Self::ItemError>>>;
 }
 
-type BoxedFuture<T> = Pin<Box<dyn Future<Output = T>>>;
-
 #[allow(clippy::module_name_repetitions)]
 pub trait CreateStream {
     type Stream: Sized + Unpin + DisposableStream;
     // this avoids nested Results
     type ConnectError: Into<<Self::Stream as DisposableStream>::ItemError>;
 
-    fn connect() -> BoxedFuture<Result<Self::Stream, Self::ConnectError>>;
+    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::ConnectError>>;
 }
 
 /// A tough stream made up of multiple [`DisposableStream`]s,
@@ -111,7 +109,7 @@ where
 
 enum State<S, E> {
     Connected(S),
-    Connecting(Pin<Box<dyn Future<Output = Result<S, E>>>>),
+    Connecting(BoxFuture<'static, Result<S, E>>),
 }
 
 impl<S, E> State<S, E> {
