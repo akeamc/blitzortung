@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{ready, Future, FutureExt, SinkExt, Stream};
+use futures::{future::BoxFuture, ready, FutureExt, SinkExt, Stream};
 #[cfg(feature = "geo")]
 use geo::{point, Point};
 use rand::{prelude::SliceRandom, rngs::OsRng};
@@ -63,7 +63,10 @@ fn decode(ciphertext: &str) -> String {
 
     let mut chars = ciphertext.chars();
 
-    let mut c = chars.next().unwrap();
+    let mut c = match chars.next() {
+        Some(c) => c,
+        None => return String::new(),
+    };
     let mut prev = c.to_string();
     let mut out = c.to_string();
     let mut dict = Vec::<String>::with_capacity(ciphertext.chars().count());
@@ -241,7 +244,7 @@ impl CreateStream for StrikeStream {
     type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
     type ConnectError = tungstenite::Error;
 
-    fn connect() -> Pin<Box<dyn Future<Output = Result<Self::Stream, Self::ConnectError>>>> {
+    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::ConnectError>> {
         connect().boxed()
     }
 }
