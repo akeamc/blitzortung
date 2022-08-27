@@ -1,6 +1,6 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
-use futures::StreamExt;
+use futures::TryStreamExt;
 use geo::{
     point,
     prelude::{HaversineDistance, VincentyDistance},
@@ -10,12 +10,6 @@ use reverse_geocoder::{Locations, ReverseGeocoder};
 use structopt::StructOpt;
 
 use tracing::{debug, info};
-
-fn cc_emoji(cc: &str) -> String {
-    cc.chars()
-        .filter_map(|c| char::from_u32(c as u32 + 0x1F1A5))
-        .collect()
-}
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -44,15 +38,12 @@ async fn main() -> anyhow::Result<()> {
 
     let opt = Opt::from_args();
 
-    // let mut client = Client::builder(&token, GatewayIntents::empty()).await?;
-
     let loc = Locations::from_memory();
     let geocoder = ReverseGeocoder::new(&loc);
 
     let mut stream = blitzortung::live::create_stream();
 
-    while let Some(res) = stream.next().await {
-        let strike = res?;
+    while let Some(strike) = stream.try_next().await? {
         let loc = strike.location();
         let dist = strike
             .location()
