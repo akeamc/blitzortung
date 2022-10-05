@@ -115,8 +115,8 @@ enum State<S, E> {
 impl<S, E> State<S, E> {
     fn stream_mut(&mut self) -> Option<&mut S> {
         match self {
-            State::Connected(s) => Some(s),
-            State::Connecting(_) => None,
+            Self::Connected(s) => Some(s),
+            Self::Connecting(_) => None,
         }
     }
 }

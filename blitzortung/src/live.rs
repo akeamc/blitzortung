@@ -255,7 +255,7 @@ impl CreateStream for StrikeStream {
 /// use futures::stream::StreamExt;
 ///
 /// # let _: Result<(), blitzortung::live::StreamError> = tokio_test::block_on(async {
-/// let mut stream = blitzortung::live::create_stream().take(10);
+/// let mut stream = blitzortung::live::stream().take(10);
 /// while let Some(result) = stream.next().await {
 ///     let strike = result?;
 /// }
