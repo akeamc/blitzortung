@@ -19,7 +19,7 @@ use tracing::{debug, instrument};
 
 use crate::stream::{CreateStream, DisposableResult, DisposableStream, DurableStream};
 
-/// An error that can occurr when streaming data.
+/// An error that can occur when streaming data.
 #[derive(Debug, Error)]
 pub enum StreamError {
     /// This error is returned if the JSON messages cannot be parsed.
@@ -263,7 +263,7 @@ impl CreateStream for StrikeStream {
 /// # });
 /// ```
 #[must_use]
-pub fn create_stream() -> DurableStream<StrikeStream> {
+pub fn stream() -> DurableStream<StrikeStream> {
     DurableStream::<StrikeStream>::connect()
 }
 
@@ -271,11 +271,11 @@ pub fn create_stream() -> DurableStream<StrikeStream> {
 mod tests {
     use futures::StreamExt;
 
-    use super::{create_stream, decode, Strike};
+    use super::{stream, decode, Strike};
 
     #[tokio::test]
     async fn ten_strikes() {
-        let mut stream = create_stream().take(10);
+        let mut stream = stream().take(10);
 
         while let Some(result) = stream.next().await {
             result.unwrap();

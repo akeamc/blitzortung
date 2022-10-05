@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let loc = Locations::from_memory();
     let geocoder = ReverseGeocoder::new(&loc);
 
-    let mut stream = blitzortung::live::create_stream();
+    let mut stream = blitzortung::live::stream();
 
     while let Some(strike) = stream.try_next().await? {
         let loc = strike.location();
