@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{future::BoxFuture, ready, FutureExt, SinkExt, Stream};
+use futures::{future::BoxFuture, ready, FutureExt, SinkExt, Stream, StreamExt};
 #[cfg(feature = "geo")]
 use geo::{point, Point};
 use rand::{prelude::SliceRandom, rngs::OsRng};
@@ -15,9 +15,10 @@ use time::{Duration, OffsetDateTime};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+#[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
 
-use crate::stream::{CreateStream, DisposableResult, DisposableStream, DurableStream};
+use crate::stream::{Factory, Infinite};
 
 /// An error that can occur when streaming data.
 #[derive(Debug, Error)]
@@ -31,7 +32,8 @@ pub enum StreamError {
     Websocket(#[from] tungstenite::Error),
 }
 
-const WS_SERVERS: &[&str] = &[
+/// Websocket servers used.
+pub const WS_SERVERS: &[&str] = &[
     "wss://ws1.blitzortung.org",
     "wss://ws7.blitzortung.org",
     "wss://ws8.blitzortung.org",
@@ -203,48 +205,55 @@ impl TryFrom<Message> for Strike {
     }
 }
 
-#[instrument]
-async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Error> {
-    let server = *WS_SERVERS.choose(&mut OsRng).unwrap();
-    debug!(server, "connecting");
+/// A single websocket stream.
+#[derive(Debug)]
+pub struct SingleStream(WebSocketStream<MaybeTlsStream<TcpStream>>);
+
+async fn connect() -> Result<SingleStream, tungstenite::Error> {
+    connect_to(WS_SERVERS.choose(&mut OsRng).unwrap()).await
+}
+
+#[cfg_attr(feature = "tracing", instrument)]
+async fn connect_to(server: &str) -> Result<SingleStream, tungstenite::Error> {
+    #[cfg(feature = "tracing")]
+    debug!("connecting");
 
     let (mut stream, _) = connect_async(server).await?;
 
     stream.send(Message::Text("{\"a\": 542}".into())).await?; // start receiving
 
-    Ok(stream)
+    Ok(SingleStream(stream))
 }
 
-impl DisposableStream for WebSocketStream<MaybeTlsStream<TcpStream>> {
-    type ItemOk = Strike;
-    type ItemError = StreamError;
+impl Stream for SingleStream {
+    type Item = Result<Strike, StreamError>;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<DisposableResult<Result<Self::ItemOk, Self::ItemError>>> {
-        let message = match ready!(Stream::poll_next(self, cx)) {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let message = match ready!(self.0.poll_next_unpin(cx)) {
             Some(Ok(message)) => message,
-            Some(Err(e)) => return Poll::Ready(DisposableResult::err(e.into())),
-            None => return Poll::Ready(DisposableResult::Discard), // discard the stream if it has ended
+            Some(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
+            None => return Poll::Ready(None), // discard the stream if it has ended
         };
 
         match message {
-            Message::Close(_) => Poll::Ready(DisposableResult::Discard),
-            _ => Poll::Ready(DisposableResult::Some(message.try_into())),
+            Message::Close(_) => Poll::Ready(None),
+            _ => Poll::Ready(Some(Strike::try_from(message))),
         }
     }
 }
 
-#[doc(hidden)]
+/// Zero-sized [`stream::Factory`](crate::stream::Factory) marker type for
+/// [`SingleStream`]s.
+///
+/// You probably don't want to interact with this directly. Instead, call [`stream`].
 #[derive(Debug)]
-pub struct StrikeStream;
+pub struct StreamFactory;
 
-impl CreateStream for StrikeStream {
-    type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-    type ConnectError = tungstenite::Error;
+impl Factory for StreamFactory {
+    type Stream = SingleStream;
+    type Error = tungstenite::Error;
 
-    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::ConnectError>> {
+    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::Error>> {
         connect().boxed()
     }
 }
@@ -263,15 +272,15 @@ impl CreateStream for StrikeStream {
 /// # });
 /// ```
 #[must_use]
-pub fn stream() -> DurableStream<StrikeStream> {
-    DurableStream::<StrikeStream>::connect()
+pub fn stream() -> Infinite<StreamFactory> {
+    Infinite::<StreamFactory>::connect()
 }
 
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
 
-    use super::{stream, decode, Strike};
+    use super::{connect_to, decode, stream, Strike, WS_SERVERS};
 
     #[tokio::test]
     async fn ten_strikes() {
@@ -296,5 +305,14 @@ mod tests {
             strike.time.to_string(),
             "2022-05-29 11:46:17.1035384 +00:00:00"
         );
+    }
+
+    #[tokio::test]
+    async fn ws_servers() {
+        for server in WS_SERVERS {
+            if let Err(e) = connect_to(server).await {
+                panic!("failed to connect to {server}: {e}");
+            }
+        }
     }
 }
