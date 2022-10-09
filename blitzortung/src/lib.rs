@@ -10,9 +10,10 @@
     missing_docs,
     missing_debug_implementations
 )]
+#![allow(clippy::missing_panics_doc)]
 
 #[cfg(feature = "live")]
 pub mod live;
 
 #[cfg(feature = "live")]
-mod stream;
+pub mod stream;

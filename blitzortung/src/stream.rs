@@ -1,90 +1,65 @@
+//! Internal stream utilities.
+
 use std::{
     fmt::Debug,
     pin::Pin,
     task::{Context, Poll},
 };
 
-use futures::{future::BoxFuture, ready, FutureExt, Stream};
+use futures::{future::BoxFuture, ready, FutureExt, Stream, TryStream};
 
-#[derive(Debug)]
-pub enum DisposableResult<T> {
-    Some(T),
-    None,
-    /// Discard the current stream and open a new one.
-    Discard,
-}
+#[cfg(feature = "tracing")]
+use tracing::debug;
 
-impl<T, E> DisposableResult<Result<T, E>> {
-    #[must_use]
-    pub const fn ok(value: T) -> Self {
-        Self::Some(Ok(value))
-    }
-
-    #[must_use]
-    pub const fn err(err: E) -> Self {
-        Self::Some(Err(err))
-    }
-}
-
-/// Sort of like `TryStream`, since connection errors must
-/// be propagated to the stream consumer.
-#[allow(clippy::module_name_repetitions)]
-pub trait DisposableStream {
-    type ItemOk;
-    type ItemError;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<DisposableResult<Result<Self::ItemOk, Self::ItemError>>>;
-}
-
-#[allow(clippy::module_name_repetitions)]
-pub trait CreateStream {
-    type Stream: Sized + Unpin + DisposableStream;
+/// A stream factory.
+pub trait Factory {
+    /// The stream that this factory produces.
+    type Stream: Sized + Unpin + TryStream;
     // this avoids nested Results
-    type ConnectError: Into<<Self::Stream as DisposableStream>::ItemError>;
+    /// Connect error.
+    type Error: Into<<Self::Stream as TryStream>::Error>;
 
-    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::ConnectError>>;
+    /// Create a new stream.
+    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::Error>>;
 }
 
-/// A tough stream made up of multiple [`DisposableStream`]s,
-/// seamlessly moving from one to another at the end of their
-/// respective lifetime.
+/// An infinite stream that never yields `None`.
 #[derive(Debug)]
-#[allow(clippy::module_name_repetitions)]
-pub struct DurableStream<T>
+pub struct Infinite<T>
 where
-    T: CreateStream,
+    T: Factory,
 {
-    state: State<T::Stream, T::ConnectError>,
+    state: State<T::Stream, T::Error>,
 }
 
-impl<T> DurableStream<T>
+impl<T> Infinite<T>
 where
-    T: CreateStream,
+    T: Factory,
 {
+    /// Open a new infinite stream.
+    #[must_use]
     pub fn connect() -> Self {
         Self {
             state: State::Connecting(T::connect()),
         }
     }
 
+    /// Force reconnect.
     pub fn reconnect(&mut self) {
         self.state = State::Connecting(T::connect());
     }
-}
 
-impl<T> Stream for DurableStream<T>
-where
-    T: CreateStream,
-{
-    type Item = Result<
-        <<T as CreateStream>::Stream as DisposableStream>::ItemOk,
-        <<T as CreateStream>::Stream as DisposableStream>::ItemError,
-    >;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    /// Poll for a new item. Unlike [`Stream::poll_next`], this never returns `None`.
+    #[allow(clippy::type_complexity)] // inherent associated types are unstable
+    pub fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<
+        Result<
+            <<T as Factory>::Stream as TryStream>::Ok,
+            <<T as Factory>::Stream as TryStream>::Error,
+        >,
+    > {
         let stream = match &mut self.state {
             State::Connected(s) => s,
             State::Connecting(fut) => match ready!(fut.poll_unpin(cx)) {
@@ -92,18 +67,34 @@ where
                     self.state = State::Connected(s);
                     self.state.stream_mut().unwrap()
                 }
-                Err(e) => return Poll::Ready(Some(Err(e.into()))),
+                Err(e) => return Poll::Ready(Err(e.into())),
             },
         };
 
-        match ready!(Pin::new(stream).poll_next(cx)) {
-            DisposableResult::Some(result) => Poll::Ready(Some(result)),
-            DisposableResult::None => Poll::Ready(None),
-            DisposableResult::Discard => {
+        ready!(Pin::new(stream).try_poll_next(cx)).map_or_else(
+            || {
+                // the underlying stream ended
+                #[cfg(feature = "tracing")]
+                debug!("reconnecting");
                 self.reconnect();
-                self.poll_next(cx)
-            }
-        }
+                self.poll(cx)
+            },
+            Poll::Ready,
+        )
+    }
+}
+
+impl<T> Stream for Infinite<T>
+where
+    T: Factory,
+{
+    type Item = Result<
+        <<T as Factory>::Stream as TryStream>::Ok,
+        <<T as Factory>::Stream as TryStream>::Error,
+    >;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.poll(cx).map(Some)
     }
 }
 
