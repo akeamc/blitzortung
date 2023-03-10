@@ -65,9 +65,8 @@ fn decode(ciphertext: &str) -> String {
 
     let mut chars = ciphertext.chars();
 
-    let mut c = match chars.next() {
-        Some(c) => c,
-        None => return String::new(),
+    let Some(mut c) = chars.next() else {
+        return String::new();
     };
     let mut prev = c.to_string();
     let mut out = c.to_string();
@@ -75,12 +74,12 @@ fn decode(ciphertext: &str) -> String {
 
     // this could probably be written a little more elegantly...
     for char in chars {
-        let code = char as u32;
+        let code = char as usize;
 
         let a = if 256 > code {
             char.to_string()
         } else {
-            dict.get(code as usize - 256)
+            dict.get(code - 256)
                 .map(Clone::clone)
                 .unwrap_or(format!("{prev}{c}"))
         };
@@ -220,7 +219,7 @@ async fn connect_to(server: &str) -> Result<SingleStream, tungstenite::Error> {
 
     let (mut stream, _) = connect_async(server).await?;
 
-    stream.send(Message::Text("{\"a\": 542}".into())).await?; // start receiving
+    stream.send(Message::Text("{\"a\":418}".into())).await?; // start receiving
 
     Ok(SingleStream(stream))
 }
@@ -261,12 +260,12 @@ impl Factory for StreamFactory {
 /// Create a stream of lightning strikes.
 ///
 /// ```
-/// use futures::stream::StreamExt;
+/// use futures::stream::{StreamExt, TryStreamExt};
 ///
 /// # let _: Result<(), blitzortung::live::StreamError> = tokio_test::block_on(async {
 /// let mut stream = blitzortung::live::stream().take(10);
-/// while let Some(result) = stream.next().await {
-///     let strike = result?;
+/// while let Some(strike) = stream.try_next().await? {
+///     println!("{strike:?}");
 /// }
 /// # Ok(())
 /// # });

@@ -10,6 +10,7 @@ use reverse_geocoder::{Locations, ReverseGeocoder};
 use structopt::StructOpt;
 
 use tracing::{debug, info};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -34,7 +35,10 @@ impl Opt {
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
 
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .pretty()
+        .init();
 
     let opt = Opt::from_args();
 
@@ -71,5 +75,5 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    unreachable!("a durable stream never ends");
+    unreachable!("an infinite stream never ends");
 }

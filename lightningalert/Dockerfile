@@ -1,4 +1,4 @@
-FROM clux/muslrust:1.61.0 as build-env
+FROM clux/muslrust:1.67.0 as build-env
 WORKDIR /app
 COPY . .
 RUN cargo build --release --bin lightningalert

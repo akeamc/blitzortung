@@ -23,7 +23,7 @@ pub trait Factory {
     fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::Error>>;
 }
 
-/// An infinite stream that never yields `None`.
+/// An infinite stream that is guaranteed to never yield `None`.
 #[derive(Debug)]
 pub struct Infinite<T>
 where
@@ -49,9 +49,9 @@ where
         self.state = State::Connecting(T::connect());
     }
 
-    /// Poll for a new item. Unlike [`Stream::poll_next`], this never returns `None`.
+    /// Poll for a new item. Unlike [`Stream::poll_next`], this does not return an `Option`.
     #[allow(clippy::type_complexity)] // inherent associated types are unstable
-    pub fn poll(
+    pub fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<
@@ -77,7 +77,7 @@ where
                 #[cfg(feature = "tracing")]
                 debug!("reconnecting");
                 self.reconnect();
-                self.poll(cx)
+                self.poll_next(cx)
             },
             Poll::Ready,
         )
@@ -94,7 +94,7 @@ where
     >;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.poll(cx).map(Some)
+        self.poll_next(cx).map(Some)
     }
 }
 
