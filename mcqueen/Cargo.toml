@@ -1,0 +1,16 @@
+[package]
+name = "mcqueen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tonic = "0.8"
+prost = "0.11"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+blitzortung = { version = "0.1", features = ["live"] }
+tokio-stream = { version = "0.1.12", features = ["sync"] }
+prost-types = "0.11.8"
+tonic-reflection = "0.6.0"
+
+[build-dependencies]
+tonic-build = "0.8"

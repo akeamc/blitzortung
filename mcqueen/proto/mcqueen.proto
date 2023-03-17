@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package mcqueen;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+service McQueen {
+  rpc Strikes (StrikeRequest) returns (stream Strike) {}
+}
+
+message StrikeRequest {}
+
+message Strike {
+  google.protobuf.Timestamp time = 1;
+  Location location = 2;
+  double altitude = 3;
+  google.protobuf.Duration delay = 4;
+}
+
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+}

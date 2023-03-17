@@ -1,5 +1,5 @@
 [workspace]
-members = ["blitzortung", "lightningalert"]
+members = ["blitzortung", "lightningalert", "mcqueen"]
 
 [patch.crates-io]
-blitzortung = { path = "./blitzortung" }
+blitzortung = { path = "blitzortung" }
