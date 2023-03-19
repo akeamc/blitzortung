@@ -6,10 +6,10 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
 
 service McQueen {
-  rpc Strikes (StrikeRequest) returns (stream Strike) {}
+  rpc LiveStrikes (LiveStrikesRequest) returns (stream Strike) {}
 }
 
-message StrikeRequest {}
+message LiveStrikesRequest {}
 
 message Strike {
   google.protobuf.Timestamp time = 1;

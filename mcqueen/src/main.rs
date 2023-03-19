@@ -4,6 +4,8 @@ use tonic::transport::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(mcqueen::pb::FILE_DESCRIPTOR_SET)
         .build()
