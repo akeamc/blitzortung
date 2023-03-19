@@ -25,39 +25,42 @@ pub trait Factory {
 
 /// An infinite stream that is guaranteed to never yield `None`.
 #[derive(Debug)]
-pub struct Infinite<T>
+pub struct Infinite<F>
 where
-    T: Factory,
+    F: Factory,
 {
-    state: State<T::Stream, T::Error>,
+    state: State<F::Stream, F::Error>,
 }
 
-impl<T> Infinite<T>
+impl<F> Infinite<F>
 where
-    T: Factory,
+    F: Factory,
+    <<F as Factory>::Stream as TryStream>::Ok: Debug,
+    <<F as Factory>::Stream as TryStream>::Error: Debug,
 {
     /// Open a new infinite stream.
     #[must_use]
     pub fn connect() -> Self {
         Self {
-            state: State::Connecting(T::connect()),
+            state: State::Connecting(F::connect()),
         }
     }
 
     /// Force reconnect.
     pub fn reconnect(&mut self) {
-        self.state = State::Connecting(T::connect());
+        self.state = State::Connecting(F::connect());
     }
 
     /// Poll for a new item. Unlike [`Stream::poll_next`], this does not return an `Option`.
     #[allow(clippy::type_complexity)] // inherent associated types are unstable
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all, ret))]
     pub fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<
         Result<
-            <<T as Factory>::Stream as TryStream>::Ok,
-            <<T as Factory>::Stream as TryStream>::Error,
+            <<F as Factory>::Stream as TryStream>::Ok,
+            <<F as Factory>::Stream as TryStream>::Error,
         >,
     > {
         let stream = match &mut self.state {
@@ -67,9 +70,12 @@ where
                     self.state = State::Connected(s);
                     self.state.stream_mut().unwrap()
                 }
-                Err(e) => return Poll::Ready(Err(e.into())),
+                Err(e) => return Poll::Ready(dbg!(Err(e.into()))),
             },
         };
+
+        #[cfg(feature = "tracing")]
+        debug!("polling stream");
 
         ready!(Pin::new(stream).try_poll_next(cx)).map_or_else(
             || {
@@ -84,13 +90,15 @@ where
     }
 }
 
-impl<T> Stream for Infinite<T>
+impl<F> Stream for Infinite<F>
 where
-    T: Factory,
+    F: Factory,
+    <<F as Factory>::Stream as TryStream>::Ok: Debug,
+    <<F as Factory>::Stream as TryStream>::Error: Debug,
 {
     type Item = Result<
-        <<T as Factory>::Stream as TryStream>::Ok,
-        <<T as Factory>::Stream as TryStream>::Error,
+        <<F as Factory>::Stream as TryStream>::Ok,
+        <<F as Factory>::Stream as TryStream>::Error,
     >;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

@@ -93,7 +93,7 @@ fn decode(ciphertext: &str) -> String {
 }
 
 /// A station monitoring lightning strikes.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Station {
     /// Station id.
@@ -149,7 +149,7 @@ mod duration_secs_serde {
 }
 
 /// A lightning strike.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Strike {
     /// Timestamp of the strike.
     #[serde(with = "unix_nanos_serde")]
@@ -205,15 +205,26 @@ impl TryFrom<Message> for Strike {
 }
 
 /// A single websocket stream.
+///
+/// Blitzortung.org hangs up on us after around 5 minutes, so we need to
+/// reconnect every now and then. [`StrikeStream`] wraps [`EphermalStream`]
+/// and handles reconnecting.
 #[derive(Debug)]
-pub struct SingleStream(WebSocketStream<MaybeTlsStream<TcpStream>>);
+pub struct EphermalStream(WebSocketStream<MaybeTlsStream<TcpStream>>);
 
-async fn connect() -> Result<SingleStream, tungstenite::Error> {
-    connect_to(WS_SERVERS.choose(&mut OsRng).unwrap()).await
+impl EphermalStream {
+    /// Connect to a Blitzortung.org websocket server.
+    /// 
+    /// # Errors
+    /// 
+    /// The function will return an error if the connection fails.
+    pub async fn new() -> Result<Self, tungstenite::Error> {
+        connect_to(WS_SERVERS.choose(&mut OsRng).unwrap()).await
+    }
 }
 
 #[cfg_attr(feature = "tracing", instrument)]
-async fn connect_to(server: &str) -> Result<SingleStream, tungstenite::Error> {
+async fn connect_to(server: &str) -> Result<EphermalStream, tungstenite::Error> {
     #[cfg(feature = "tracing")]
     debug!("connecting");
 
@@ -221,10 +232,13 @@ async fn connect_to(server: &str) -> Result<SingleStream, tungstenite::Error> {
 
     stream.send(Message::Text("{\"a\":418}".into())).await?; // start receiving
 
-    Ok(SingleStream(stream))
+    #[cfg(feature = "tracing")]
+    debug!("connected");
+
+    Ok(EphermalStream(stream))
 }
 
-impl Stream for SingleStream {
+impl Stream for EphermalStream {
     type Item = Result<Strike, StreamError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -242,20 +256,22 @@ impl Stream for SingleStream {
 }
 
 /// Zero-sized [`stream::Factory`](crate::stream::Factory) marker type for
-/// [`SingleStream`]s.
-///
-/// You probably don't want to interact with this directly. Instead, call [`stream`].
+/// [`EphermalStream`]s.
 #[derive(Debug)]
-pub struct StreamFactory;
+pub struct StrikeStreamFactory;
 
-impl Factory for StreamFactory {
-    type Stream = SingleStream;
+impl Factory for StrikeStreamFactory {
+    type Stream = EphermalStream;
     type Error = tungstenite::Error;
 
     fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::Error>> {
-        connect().boxed()
+        EphermalStream::new().boxed()
     }
 }
+
+/// An infinite stream of lightning strikes that automatically
+/// reconnects.
+pub type StrikeStream = Infinite<StrikeStreamFactory>;
 
 /// Create a stream of lightning strikes.
 ///
@@ -271,8 +287,8 @@ impl Factory for StreamFactory {
 /// # });
 /// ```
 #[must_use]
-pub fn stream() -> Infinite<StreamFactory> {
-    Infinite::<StreamFactory>::connect()
+pub fn stream() -> StrikeStream {
+    Infinite::<StrikeStreamFactory>::connect()
 }
 
 #[cfg(test)]
