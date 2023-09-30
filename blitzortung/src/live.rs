@@ -1,5 +1,6 @@
 //! Live data from Blitzortung.org via websockets.
 use std::{
+    fmt,
     pin::Pin,
     str::FromStr,
     task::{Context, Poll},
@@ -18,17 +19,15 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
 
-use crate::stream::{Factory, Infinite};
-
 /// An error that can occur when streaming data.
 #[derive(Debug, Error)]
 pub enum StreamError {
     /// This error is returned if the JSON messages cannot be parsed.
-    #[error("decode json failed")]
-    Serde(#[from] serde_json::Error),
+    #[error("decode json failed: {0}")]
+    Decode(#[from] serde_json::Error),
     /// If something goes wrong when connecting or when receiving a websocket
     /// message, [`StreamError::Websocket`] is returned.
-    #[error("{0}")]
+    #[error("websocket error: {0}")]
     Websocket(#[from] tungstenite::Error),
 }
 
@@ -94,7 +93,6 @@ fn decode(ciphertext: &str) -> String {
 
 /// A station monitoring lightning strikes.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Station {
     /// Station id.
     pub sta: u32,
@@ -206,17 +204,17 @@ impl TryFrom<Message> for Strike {
 
 /// A single websocket stream.
 ///
-/// Blitzortung.org hangs up on us after around 5 minutes, so we need to
-/// reconnect every now and then. [`StrikeStream`] wraps [`EphermalStream`]
+/// Blitzortung.org hangs up after around 5 minutes, so we need to
+/// reconnect every now and then. [`StrikeStream`] wraps [`Connection`]
 /// and handles reconnecting.
 #[derive(Debug)]
-pub struct EphermalStream(WebSocketStream<MaybeTlsStream<TcpStream>>);
+pub struct Connection(WebSocketStream<MaybeTlsStream<TcpStream>>);
 
-impl EphermalStream {
+impl Connection {
     /// Connect to a Blitzortung.org websocket server.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// The function will return an error if the connection fails.
     pub async fn new() -> Result<Self, tungstenite::Error> {
         connect_to(WS_SERVERS.choose(&mut OsRng).unwrap()).await
@@ -224,21 +222,21 @@ impl EphermalStream {
 }
 
 #[cfg_attr(feature = "tracing", instrument)]
-async fn connect_to(server: &str) -> Result<EphermalStream, tungstenite::Error> {
+async fn connect_to(server: &str) -> Result<Connection, tungstenite::Error> {
     #[cfg(feature = "tracing")]
     debug!("connecting");
 
     let (mut stream, _) = connect_async(server).await?;
 
-    stream.send(Message::Text("{\"a\":418}".into())).await?; // start receiving
+    stream.send(Message::Text("{\"a\":111}".into())).await?; // start receiving
 
     #[cfg(feature = "tracing")]
     debug!("connected");
 
-    Ok(EphermalStream(stream))
+    Ok(Connection(stream))
 }
 
-impl Stream for EphermalStream {
+impl Stream for Connection {
     type Item = Result<Strike, StreamError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -255,23 +253,76 @@ impl Stream for EphermalStream {
     }
 }
 
-/// Zero-sized [`stream::Factory`](crate::stream::Factory) marker type for
-/// [`EphermalStream`]s.
+/// An infinite stream of lightning strikes that automatically
+/// reconnects. Never yields `None`.
 #[derive(Debug)]
-pub struct StrikeStreamFactory;
+pub struct StrikeStream {
+    state: State,
+}
 
-impl Factory for StrikeStreamFactory {
-    type Stream = EphermalStream;
-    type Error = tungstenite::Error;
-
-    fn connect() -> BoxFuture<'static, Result<Self::Stream, Self::Error>> {
-        EphermalStream::new().boxed()
+impl StrikeStream {
+    /// Create a new stream.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: State::Connecting(Connection::new().boxed()),
+        }
     }
 }
 
-/// An infinite stream of lightning strikes that automatically
-/// reconnects.
-pub type StrikeStream = Infinite<StrikeStreamFactory>;
+impl Default for StrikeStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Stream for StrikeStream {
+    type Item = Result<Strike, StreamError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let conn = match &mut self.state {
+            State::Connected(conn) => conn,
+            State::Connecting(fut) => match ready!(fut.poll_unpin(cx)) {
+                Ok(conn) => {
+                    self.state = State::Connected(conn);
+                    self.state.connection_mut().unwrap()
+                }
+                Err(e) => return Poll::Ready(Some(Err(e.into()))),
+            },
+        };
+
+        ready!(conn.poll_next_unpin(cx)).map_or_else(
+            || {
+                self.state = State::Connecting(Connection::new().boxed());
+                self.poll_next(cx)
+            },
+            |res| Poll::Ready(Some(res)),
+        )
+    }
+}
+
+enum State {
+    Connected(Connection),
+    Connecting(BoxFuture<'static, Result<Connection, tungstenite::Error>>),
+}
+
+impl State {
+    fn connection_mut(&mut self) -> Option<&mut Connection> {
+        match self {
+            Self::Connected(connection) => Some(connection),
+            Self::Connecting(_) => None,
+        }
+    }
+}
+
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connected(_) => f.debug_tuple("Connected").finish(),
+            Self::Connecting(_) => f.debug_tuple("Connecting").finish(),
+        }
+    }
+}
 
 /// Create a stream of lightning strikes.
 ///
@@ -288,7 +339,7 @@ pub type StrikeStream = Infinite<StrikeStreamFactory>;
 /// ```
 #[must_use]
 pub fn stream() -> StrikeStream {
-    Infinite::<StrikeStreamFactory>::connect()
+    StrikeStream::new()
 }
 
 #[cfg(test)]

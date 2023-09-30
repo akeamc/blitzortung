@@ -13,12 +13,22 @@ message LiveStrikesRequest {}
 
 message Strike {
   google.protobuf.Timestamp time = 1;
-  Location location = 2;
-  double altitude = 3;
-  google.protobuf.Duration delay = 4;
+  google.protobuf.Duration delay = 2;
+  Location location = 3;
+  double altitude = 4;
+  uint32 region = 5;
+  repeated Station stations = 6;
 }
 
 message Location {
   double latitude = 1;
   double longitude = 2;
+}
+
+message Station {
+  uint32 id = 1;
+  google.protobuf.Duration time = 2;
+  Location location = 3;
+  double altitude = 4;
+  uint32 status = 5;
 }

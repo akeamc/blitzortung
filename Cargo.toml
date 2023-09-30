@@ -3,3 +3,6 @@ members = ["blitzortung", "mcqueen"]
 
 [patch.crates-io]
 blitzortung = { path = "blitzortung" }
+
+[workspace.dependencies]
+time = "0.3"

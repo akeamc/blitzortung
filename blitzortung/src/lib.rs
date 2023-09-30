@@ -1,4 +1,4 @@
-//! Blitzortung.org client library.
+//! Blitzortung.org client.
 //!
 //! ## Live data
 //!
@@ -15,6 +15,3 @@
 
 #[cfg(feature = "live")]
 pub mod live;
-
-#[cfg(feature = "live")]
-pub mod stream;

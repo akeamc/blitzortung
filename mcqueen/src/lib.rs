@@ -3,16 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use pb::{mc_queen_server::McQueen, LiveStrikesRequest};
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
+use tokio::sync::broadcast;
+use tokio_stream::{wrappers::BroadcastStream, Stream};
 use tonic::{Request, Response, Status};
-use tracing::debug;
+use tracing::{debug, error};
 
 pub mod pb {
-    use prost_types::Timestamp;
-
     tonic::include_proto!("mcqueen");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =
@@ -29,25 +27,54 @@ pub mod pb {
                 mds: _,
                 mcg: _,
                 status: _,
-                region: _,
-                sig: _,
+                region,
+                sig,
                 delay,
             } = value;
 
             Self {
-                time: Some(Timestamp {
+                time: Some(prost_types::Timestamp {
                     seconds: time.unix_timestamp(),
                     nanos: time.nanosecond() as _,
+                }),
+                delay: Some(prost_types::Duration {
+                    seconds: delay.whole_seconds(),
+                    nanos: delay.subsec_nanoseconds(),
                 }),
                 location: Some(Location {
                     latitude: lat,
                     longitude: lon,
                 }),
                 altitude: alt,
-                delay: Some(prost_types::Duration {
-                    seconds: delay.whole_seconds(),
-                    nanos: delay.subsec_nanoseconds(),
+                region: region as _,
+                stations: sig.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    impl From<blitzortung::live::Station> for Station {
+        fn from(value: blitzortung::live::Station) -> Self {
+            let blitzortung::live::Station {
+                sta,
+                time,
+                lat,
+                lon,
+                alt,
+                status,
+            } = value;
+
+            Self {
+                id: sta,
+                time: Some(prost_types::Duration {
+                    seconds: time.whole_seconds(),
+                    nanos: time.subsec_nanoseconds(),
                 }),
+                location: Some(Location {
+                    latitude: lat,
+                    longitude: lon,
+                }),
+                altitude: alt,
+                status,
             }
         }
     }
@@ -64,6 +91,39 @@ impl MyMcQueen {
             tx: Arc::new(Mutex::new(None)),
         }
     }
+
+    fn receiver(&self) -> broadcast::Receiver<blitzortung::live::Strike> {
+        let mut tx_mutex = self.tx.lock().unwrap();
+
+        if let Some(tx) = tx_mutex.as_ref() {
+            tx.subscribe()
+        } else {
+            let (tx, rx) = broadcast::channel(128);
+            *tx_mutex = Some(tx.clone());
+
+            let tx_arc = self.tx.clone();
+            tokio::spawn(async move {
+                let mut stream = blitzortung::live::stream();
+
+                while let Some(res) = stream.next().await {
+                    match res {
+                        Ok(item) => match tx.send(item) {
+                            Ok(rxs) => debug!(%rxs, "broadcasted strike"),
+                            Err(_e) => {
+                                // all clients disconnected
+                                tx_arc.lock().unwrap().take(); // drop tx
+                                debug!("all clients disconnected");
+                                break;
+                            }
+                        },
+                        Err(e) => error!("stream error: {e}"),
+                    };
+                }
+            });
+
+            rx
+        }
+    }
 }
 
 type RpcResult<T> = Result<Response<T>, Status>;
@@ -76,43 +136,11 @@ impl McQueen for MyMcQueen {
         &self,
         _req: Request<LiveStrikesRequest>,
     ) -> RpcResult<Self::LiveStrikesStream> {
-        let mut stream = blitzortung::live::stream();
-
-        println!("helo");
-
-        let mut tx_mutex = self.tx.lock().unwrap();
-
-        let rx = if let Some(tx) = tx_mutex.as_ref() {
-            tx.subscribe()
-        } else {
-            let (tx, rx) = broadcast::channel(128);
-            *tx_mutex = Some(tx.clone());
-
-            let tx_arc = self.tx.clone();
-            tokio::spawn(async move {
-                while let Some(item) = stream.next().await {
-                    match tx.send(item.unwrap()) {
-                        Ok(_) => {
-                            // item (server response) was queued to be send to client
-                        }
-                        Err(_e) => {
-                            tx_arc.lock().unwrap().take(); // drop tx
-                            break;
-                        }
-                    }
-                }
-                debug!("clients disconnected");
-            });
-            rx
-        };
-
-        drop(tx_mutex);
-
-        let output_stream = BroadcastStream::new(rx)
-            .map_ok(Into::into)
-            .map_err(|e| Status::internal(format!("broadcast stream error: {}", e)));
         Ok(Response::new(
-            Box::pin(output_stream) as Self::LiveStrikesStream
+            BroadcastStream::new(self.receiver())
+                .map_ok(Into::into)
+                .map_err(|e| Status::internal(format!("broadcast stream error: {}", e)))
+                .boxed(),
         ))
     }
 }
