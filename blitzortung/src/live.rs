@@ -7,9 +7,11 @@ use std::{
 };
 
 use futures::{future::BoxFuture, ready, FutureExt, SinkExt, Stream, StreamExt};
-#[cfg(feature = "geo")]
-use geo::{point, Point};
+#[cfg(feature = "geo-types")]
+use geo_types::{point, Point};
+use once_cell::sync::Lazy;
 use rand::{prelude::SliceRandom, rngs::OsRng};
+use regex::Regex;
 use serde::Deserialize;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
@@ -18,6 +20,14 @@ use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
+
+#[derive(Debug, Error)]
+enum ConnectError {
+    #[error("websocket error: {0}")]
+    Tungstenite(tungstenite::Error),
+    #[error("reqwest error: {0}")]
+    Reqwest(reqwest::Error),
+}
 
 /// An error that can occur when streaming data.
 #[derive(Debug, Error)]
@@ -29,6 +39,9 @@ pub enum StreamError {
     /// message, [`StreamError::Websocket`] is returned.
     #[error("websocket error: {0}")]
     Websocket(#[from] tungstenite::Error),
+
+    #[error("{0}")]
+    Connect(#[from] ConnectError),
 }
 
 /// Websocket servers used.
@@ -179,7 +192,7 @@ pub struct Strike {
 impl Strike {
     /// Get the estimated location of the strike.
     #[must_use]
-    #[cfg(feature = "geo")]
+    #[cfg(feature = "geo-types")]
     pub fn location(&self) -> Point<f64> {
         point! { x: self.lon, y: self.lat }
     }

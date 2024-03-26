@@ -1,5 +1,6 @@
 [workspace]
 members = ["blitzortung", "mcqueen"]
+resolver = "2"
 
 [patch.crates-io]
 blitzortung = { path = "blitzortung" }
